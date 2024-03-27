@@ -11,11 +11,13 @@ from selenium.webdriver.chrome.options import Options
 from datetime import datetime
 import time
 
-import shutil
 import configparser
 
 import smtplib
 from email.message import EmailMessage
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
 import mimetypes
 
 from PIL import Image
@@ -28,40 +30,55 @@ import os
 
 def envia_email (email, asunto, body, pantallazo=None):
     # Email settings
-    sender_email = "izix.notificaciones@gmail.com"
-    receiver_email = email
+    sender_email = email_notif
     password = pass_email_notif
+    receiver_email = email
+    
 
     # Create the email message
-    msg = EmailMessage()
-    msg['Subject'] = asunto
-    msg['From'] = sender_email
-    msg['To'] = receiver_email
-    msg.set_content(body)
-
     if pantallazo:
-        
+        msg = MIMEMultipart('related')
+        msg['Subject'] = asunto
+        msg['From'] = sender_email
+        msg['To'] = receiver_email
+
+        # HTML body with image
+        html_body = f"""
+        <html>
+            <body>
+                <p>{body}</p>
+                <img src="cid:image1" style="width: 50%; height: auto;">
+            </body>
+        </html>
+        """
+        msg.attach(MIMEText(html_body, 'html'))
+
+        # Open the screenshot image to embed
         image_path = pantallazo
         ctype, encoding = mimetypes.guess_type(image_path)
         if ctype is None or encoding is not None:
             ctype = "application/octet-stream"
+        
         maintype, subtype = ctype.split("/", 1)
-
         with open(image_path, 'rb') as fp:
-            msg.add_attachment(fp.read(), maintype=maintype, subtype=subtype, filename=image_path.split("/")[-1])
+            img = MIMEImage(fp.read(), _subtype=subtype)
+            img.add_header('Content-ID', '<image1>')  # Use this 'Content-ID' in the HTML img src
+            msg.attach(img)
+    else:
+        msg = EmailMessage()
+        msg['Subject'] = asunto
+        msg['From'] = sender_email
+        msg['To'] = receiver_email
+        msg.set_content(body)
 
-    # Send the email
+    # Send the message via SMTP server
     try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(sender_email, password)
-            smtp.send_message(msg, from_addr=sender_email, to_addrs=[receiver_email])
-        print("\nEmail enviado al usuario")
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(sender_email, password)
+            server.send_message(msg)
+            print("Email enviado")
     except Exception as e:
-        print(f"Failed to send email: {e}")
-
-
-
-
+        print(f"Fallo al enviar el email: {e}")
 
 
 
@@ -70,7 +87,17 @@ def save_screenshot(driver):
     image = Image.open(io.BytesIO(screenshot_as_png))
     if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
         image = image.convert("RGB")
-    image.save(screenshot_path, 'JPEG', quality=85)
+    
+    # Calcula tamaño reducido (50% of the original size)
+    original_width, original_height = image.size
+    new_width = original_width // 2
+    new_height = original_height // 2
+    
+    # Redimensiona la imagen
+    resized_image = image.resize((new_width, new_height), Image.LANCZOS)
+    
+    # guarda la imagen resultante
+    resized_image.save(screenshot_path, 'JPEG', quality=85)
 
 
 def setup_driver():
@@ -181,25 +208,33 @@ if __name__ == "__main__":
         print(f"     evotempo_path:{config_path}")
     else:
         print("     evotempo_path: environment variable not set.")
-    envio_email = True
-    print ("     envio_email: " + str(envio_email))
     
-   
     # Initialize the configparser
     config = configparser.ConfigParser()
     # Read the configuration file
     config.read(config_path)
 
-    # Now, extract the variables from the configuration file
-    log = config['Paths']['log']                            # path al fichero local de logado
-    screenshot_path = config['Paths']['screenshot_path']    # path al fichero local con pantallazo
-    pass_email_notif = config['Settings']['pass_email_notif']                  # contraseña de email de notificaciones
-    email_admin = config['Settings']['email_admin']                  # email de notificaciones
-    url_evotempo = config['Paths']['url_evotempo']                            # url de la página de fichaje
+    try:
+        # Now, extract the variables from the configuration file
+        url_evotempo = config['Paths']['url_evotempo']                            # url de la página de fichaje
+        log = config['Paths']['log']                            # path al fichero local de logado
+        screenshot_path = config['Paths']['screenshot_path']    # path al fichero local con pantallazo
+        pass_email_notif = config['Settings']['pass_email_notif']                  # contraseña de email de notificaciones
+        envio_email = config.getboolean('Settings', 'envio_email')                 # envio de notificaciones por email
+        email_admin = config['Settings']['email_admin']                  # email de admin
+        email_notif = config['Settings']['email_notif']                  # email de notificaciones
+        
+        print ("     envio_email: " + str(envio_email))
+    except configparser.NoSectionError:
+        # Handle the case where the section is not found
+        print('Error, falta una sección en el fichero de config')
+    except configparser.NoOptionError:
+        # Handle the case where the option within the section is not found
+        print('Error, falta una opción en el fichero de config')
 
     print ("\nInicia el fichaje\n")    
     
-    Intentos_max = 3
+    Intentos_max = 1
     intentos = 0
     while intentos < Intentos_max:
         print ("Intento: ", intentos+1)
